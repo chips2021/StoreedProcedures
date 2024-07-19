@@ -1,0 +1,74 @@
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+ALTER PROCEDURE [dbo].[sp_Populate_FACTS_Car_Serviced_Per_Category]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        IF OBJECT_ID(N'dbo.FACTS_Car_Serviced_Per_Category', N'U') IS NOT NULL
+            TRUNCATE TABLE [dbo].[FACTS_Car_Serviced_Per_Category];
+
+        WITH TempInvoice AS (
+            SELECT 
+                pmai.store AS StoreNumber, 
+                pmai.invoice_id, 
+                CAST(pmai.invoice_date AS DATE) AS DateId, 
+                SUM(pmai.invoice_gross) AS Price, 
+                pmai.mileage, 
+                pmai.invoice_number
+            FROM 
+                dbo.DIM_PMA_Invoice AS pmai
+            WHERE 
+                pmai.invoice_gross <> 0.0
+            GROUP BY 
+                pmai.store, 
+                pmai.invoice_id, 
+                CAST(pmai.invoice_date AS DATE), 
+                pmai.mileage, 
+                pmai.invoice_number
+        ),
+        TempInvoiceVehicle AS (
+            SELECT 
+                pmainv.invoice_number, 
+                pmainv.vehicle_id 
+            FROM 
+                dbo.DIM_PMA_Invoice_vehicle AS pmainv
+        )
+
+        INSERT INTO [dbo].[FACTS_Car_Serviced_Per_Category] (StoreNumber, invoice_id, DateId, Price, vehicle_id, mileage)
+        SELECT 
+            tin.StoreNumber, 
+            tin.invoice_id, 
+            tin.DateId, 
+            tin.Price, 
+            tnv.vehicle_id, 
+            tin.mileage
+        FROM 
+            TempInvoice AS tin
+            INNER JOIN TempInvoiceVehicle AS tnv
+                ON tnv.invoice_number = tin.invoice_number;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        EXEC sp_GetErrorInfo;
+        IF (XACT_STATE() = -1)
+        BEGIN
+            PRINT N'The transaction is in an uncommittable state. Rolling back transaction.';
+            ROLLBACK TRANSACTION;
+        END;
+        IF (XACT_STATE() = 1)
+        BEGIN
+            PRINT N'The transaction is committable. Committing transaction.';
+            COMMIT TRANSACTION;
+        END;
+    END CATCH
+END
+GO
