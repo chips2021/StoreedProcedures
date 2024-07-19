@@ -1,0 +1,90 @@
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+ALTER PROCEDURE [dbo].[sp_Populate_FACTS_Car_Count]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        IF OBJECT_ID(N'dbo.FACTS_Car_Count', N'U') IS NOT NULL
+            TRUNCATE TABLE [dbo].[FACTS_Car_Count];
+
+        WITH CarCountCTE AS (
+            SELECT 
+                pmasl.store_list_store AS StoreNumber, 
+                CAST(pmai.invoice_date AS DATE) AS DateId, 
+                SUM(pmai.car_count) AS SumCount,
+                pmai.SourceID
+            FROM 
+                dbo.vw_PMA_store_list AS pmasl
+                JOIN dbo.DIM_PMA_Invoice AS pmai
+                    ON pmasl.store_list_store = pmai.store
+            WHERE 
+                pmai.voided = 0 
+            GROUP BY 
+                pmasl.store_list_store, 
+                CAST(pmai.invoice_date AS DATE),
+                pmai.SourceID
+        )
+        INSERT INTO [dbo].[FACTS_Car_Count] (StoreNumber, DateId, CarCount, SourceID)
+        SELECT 
+            StoreNumber, 
+            DateId, 
+            SumCount,
+            SourceID
+        FROM CarCountCTE;
+
+        WITH TempCarCountCTE AS (
+            SELECT 
+                pmasl.store_list_store AS StoreNumber, 
+                CAST(pmai.invoice_date AS DATE) AS DateId, 
+                COUNT(DISTINCT pmai.invoice_number) AS SumCount,
+                pmai.SourceID
+            FROM 
+                dbo.vw_PMA_store_list AS pmasl
+                JOIN dbo.DIM_PMA_invoice_aquisation AS pmai
+                    ON pmasl.store_list_store = pmai.store
+            WHERE 
+                pmai.store IN ('112233') /* OR pmai.store IN ('928','929','930','931','932','933','934') */
+                AND pmai.voided = 0
+            GROUP BY 
+                pmasl.store_list_store, 
+                CAST(pmai.invoice_date AS DATE),
+                pmai.SourceID
+        )
+        MERGE INTO [dbo].[FACTS_Car_Count] AS target
+        USING TempCarCountCTE AS source
+        ON target.StoreNumber = source.StoreNumber AND target.DateId = source.DateId
+        WHEN MATCHED THEN
+            UPDATE SET 
+                target.CarCount = source.SumCount, 
+                target.SourceID = source.SourceID
+        WHEN NOT MATCHED THEN
+            INSERT (StoreNumber, DateId, CarCount, SourceID) 
+            VALUES (source.StoreNumber, source.DateId, source.SumCount, source.SourceID);
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        EXEC sp_GetErrorInfo;
+
+        IF (XACT_STATE() = -1)
+        BEGIN
+            PRINT N'The transaction is in an uncommittable state. Rolling back transaction.';
+            ROLLBACK TRANSACTION;
+        END;
+
+        IF (XACT_STATE() = 1)
+        BEGIN
+            PRINT N'The transaction is committable. Committing transaction.';
+            COMMIT TRANSACTION;
+        END;
+    END CATCH
+END
+GO
