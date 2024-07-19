@@ -1,0 +1,64 @@
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE PROCEDURE [dbo].[sp_Populate_FACTS_OilConsumption]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        INSERT INTO FACTS_OilConsumption (StoreNumber, Category, Item, DateId, Quantity, SourceID)
+        SELECT 
+            pmasl.store_list_store AS StoreNumber, 
+            pmaii.Category AS Category, 
+            pmaii.item AS Item, 
+            CAST(pmai.invoice_date AS DATE) AS DateId, 
+            SUM(pmaii.qty) AS Quantity,
+            pmai.SourceID
+        FROM 
+            dbo.vw_PMA_store_list AS pmasl
+            JOIN dbo.DIM_PMA_Invoice AS pmai
+                ON pmasl.store_list_store = pmai.store
+            JOIN dbo.DIM_PMA_InvoiceItem AS pmaii
+                ON pmai.invoice_number = pmaii.invoice_number
+        WHERE 
+            NOT EXISTS (
+                SELECT 1
+                FROM FACTS_OilConsumption AS foc
+                WHERE 
+                    foc.StoreNumber = pmasl.store_list_store AND
+                    foc.Category = pmaii.Category AND
+                    foc.Item = pmaii.item AND
+                    foc.DateId = CAST(pmai.invoice_date AS DATE)
+            )
+        GROUP BY 
+            pmasl.store_list_store, 
+            CAST(pmai.invoice_date AS DATE), 
+            pmaii.Category, 
+            pmaii.item, 
+            pmai.SourceID;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        EXEC sp_GetErrorInfo;
+
+        IF (XACT_STATE() = -1)
+        BEGIN
+            PRINT N'The transaction is in an uncommittable state. Rolling back transaction.';
+            ROLLBACK TRANSACTION;
+        END;
+
+        IF (XACT_STATE() = 1)
+        BEGIN
+            PRINT N'The transaction is committable. Committing transaction.';
+            COMMIT TRANSACTION;
+        END;
+    END CATCH
+END
+GO
