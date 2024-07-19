@@ -1,0 +1,66 @@
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+ALTER PROCEDURE [dbo].[sp_Populate_FACTS_LOF_Sales]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        IF OBJECT_ID(N'dbo.FACTS_LOF_Sales', N'U') IS NOT NULL
+            TRUNCATE TABLE [dbo].[FACTS_LOF_Sales];
+
+        WITH SalesCTE AS (
+            SELECT 
+                pmasl.store_list_store AS StoreNumber, 
+                CAST(pmai.invoice_date AS DATE) AS DateId,
+                SUM(pmaii.price * pmaii.qty) AS Sales,
+                pmai.SourceID
+            FROM 
+                dbo.vw_PMA_store_list AS pmasl
+                JOIN dbo.DIM_PMA_Invoice AS pmai
+                    ON pmasl.store_list_store = pmai.store
+                JOIN dbo.DIM_PMA_InvoiceItem AS pmaii
+                    ON pmai.invoice_number = pmaii.invoice_number
+                JOIN dbo.DIM_PMA_Invoice_categoryv2 AS pmaic
+                    ON pmaii.category = pmaic.category
+            WHERE 
+                pmaic.catcode = 'LOF' 
+                AND pmai.voided = 0
+            GROUP BY 
+                pmasl.store_list_store, 
+                CAST(pmai.invoice_date AS DATE),
+                pmai.SourceID
+        )
+        INSERT INTO [dbo].[FACTS_LOF_Sales] (StoreNumber, DateId, Sales, SourceID)
+        SELECT 
+            StoreNumber, 
+            DateId, 
+            Sales,
+            SourceID
+        FROM SalesCTE;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        EXEC sp_GetErrorInfo;
+
+        IF (XACT_STATE() = -1)
+        BEGIN
+            PRINT N'The transaction is in an uncommittable state. Rolling back transaction.';
+            ROLLBACK TRANSACTION;
+        END;
+
+        IF (XACT_STATE() = 1)
+        BEGIN
+            PRINT N'The transaction is committable. Committing transaction.';
+            COMMIT TRANSACTION;
+        END;
+    END CATCH
+END
+GO
