@@ -1,0 +1,62 @@
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+ALTER PROCEDURE [dbo].[sp_Populate_FACTS_Services]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    BEGIN TRY
+        BEGIN TRANSACTION
+
+        IF OBJECT_ID(N'dbo.FACTS_Services', N'U') IS NOT NULL
+        BEGIN
+            TRUNCATE TABLE [dbo].[FACTS_Services];
+        END
+
+        ;WITH FilteredInvoices AS (
+            SELECT 
+                pmasl.store_list_store AS StoreNumber, 
+                CAST(pmai.invoice_date AS DATE) AS DateId, 
+                pmaii.price, 
+                pmai.SourceID
+            FROM 
+                dbo.vw_PMA_store_list AS pmasl
+                JOIN dbo.DIM_PMA_Invoice AS pmai ON pmasl.store_list_store = pmai.store
+                JOIN dbo.DIM_PMA_InvoiceItem AS pmaii ON pmai.invoice_number = pmaii.invoice_number
+                JOIN dbo.DIM_PMA_Invoice_category AS pmaic ON pmaii.category = pmaic.category
+            WHERE 
+                pmaic.catcode NOT IN ('SC', 'LOF', 'TopOff', 'Tires', 'inspection', 'cstore', 'washbox')
+        )
+        INSERT INTO [dbo].[FACTS_Services] (StoreNumber, DateId, ServiceAveragePrice, SourceID)
+        SELECT 
+            StoreNumber, 
+            DateId, 
+            SUM(price) AS ServiceAveragePrice, 
+            SourceID
+        FROM 
+            FilteredInvoices
+        GROUP BY 
+            StoreNumber, 
+            DateId, 
+            SourceID;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        EXEC sp_GetErrorInfo;
+        IF (XACT_STATE() = -1)
+        BEGIN
+            PRINT 'The transaction is in an uncommittable state. Rolling back transaction.';
+            ROLLBACK TRANSACTION;
+        END
+        ELSE IF (XACT_STATE() = 1)
+        BEGIN
+            PRINT 'The transaction is committable. Committing transaction.';
+            COMMIT TRANSACTION;
+        END
+    END CATCH
+END
+GO
