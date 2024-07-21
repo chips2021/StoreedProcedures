@@ -1,4 +1,4 @@
-# StoreedProcedures
+# StoredProcedures
 ### Summarized Explanation of Optimizations for All Stored Procedures
 
 **General Improvements Across Procedures**:
